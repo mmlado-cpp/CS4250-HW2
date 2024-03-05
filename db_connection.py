@@ -1,68 +1,142 @@
 #-------------------------------------------------------------------------
-# AUTHOR: your name
-# FILENAME: title of the source file
+# AUTHOR: Martin Lado
+# FILENAME: db_connection.py
 # SPECIFICATION: description of the program
-# FOR: CS 4250- Assignment #1
-# TIME SPENT: how long it took you to complete the assignment
+# FOR: CS 4250 - Assignment #2
+# TIME SPENT: 3 hours
 #-----------------------------------------------------------*/
 
 #IMPORTANT NOTE: DO NOT USE ANY ADVANCED PYTHON LIBRARY TO COMPLETE THIS CODE SUCH AS numpy OR pandas. You have to work here only with
 # standard arrays
 
-#importing some Python libraries
-# --> add your Python code here
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 def connectDataBase():
+    DB_NAME = "4250-HW2"
+    DB_USER = "postgres"
+    DB_PASS = "123"
+    DB_HOST = "localhost"
+    DB_PORT = "5432"
 
-    # Create a database connection object using psycopg2
-    # --> add your Python code here
+    try:
+        conn = psycopg2.connect(database=DB_NAME,
+                                user=DB_USER,
+                                password=DB_PASS,
+                                host=DB_HOST,
+                                port=DB_PORT,
+                                cursor_factory=RealDictCursor)
+        print("Database connected successfully")
+        createTables(conn.cursor(), conn)
+        return conn
+
+    except:
+        print("Database could not be connected")
+        
+def createTables(cur, conn):
+    try:
+        sql = "CREATE TABLE categories (id_cat text,name text, CONSTRAINT category_pk PRIMARY KEY (id_cat))"
+        cur.execute(sql)
+        sql = "CREATE TABLE documents (doc text, text text," \
+              "title text, num_chars text, date text, id_cat text," \
+              "CONSTRAINT documents_pk PRIMARY KEY (doc), CONSTRAINT category_fk FOREIGN KEY (id_cat) " \
+              "REFERENCES categories (id_cat))"
+        cur.execute(sql)
+        sql = "CREATE TABLE terms (term text, num_chars text," \
+              "CONSTRAINT terms_pk PRIMARY KEY (term))"
+        cur.execute(sql)
+        sql = "CREATE TABLE index (doc text, term text, term_count text," \
+              "CONSTRAINT index_pk PRIMARY KEY (doc, term), " \
+              "CONSTRAINT document_index_fk FOREIGN KEY (doc) REFERENCES documents (doc)," \
+              "CONSTRAINT term_index_fk FOREIGN KEY (term) REFERENCES terms (term))"
+        cur.execute(sql)
+        conn.commit()
+    except:
+        conn.rollback()
+        print ("Could not create databse or database may already exist.")
+
 
 def createCategory(cur, catId, catName):
-
-    # Insert a category in the database
-    # --> add your Python code here
+    sql = "Insert into categories (id_cat, name) Values (%s, %s)"
+    recset = [catId, catName]
+    cur.execute(sql, recset)
 
 def createDocument(cur, docId, docText, docTitle, docDate, docCat):
+    cur.execute("select id_cat from categories where name = %(docCat)s", {'docCat': docCat})
+    recset = cur.fetchone()
 
-    # 1 Get the category id based on the informed category name
-    # --> add your Python code here
+    if recset:
+       catId = recset['id_cat']
+    else:
+       print("Invalid category. Restart the program.")
+       exit()
 
-    # 2 Insert the document in the database. For num_chars, discard the spaces and punctuation marks.
-    # --> add your Python code here
+    sql = "Insert into documents (doc, text, title, num_chars, date, id_cat) Values (%s, %s, %s, %s, %s, %s)"
+    values = [docId, docText, docTitle,  len(convertText(docText).replace(" ","")), docDate, catId]
+    cur.execute(sql, values)
 
-    # 3 Update the potential new terms.
-    # 3.1 Find all terms that belong to the document. Use space " " as the delimiter character for terms and Remember to lowercase terms and remove punctuation marks.
-    # 3.2 For each term identified, check if the term already exists in the database
-    # 3.3 In case the term does not exist, insert it into the database
-    # --> add your Python code here
+    dic_Terms = {}
+    docText = convertText(docText)
+    terms = docText.split(" ")
 
-    # 4 Update the index
-    # 4.1 Find all terms that belong to the document
-    # 4.2 Create a data structure the stores how many times (count) each term appears in the document
-    # 4.3 Insert the term and its corresponding count into the database
-    # --> add your Python code here
+    for term in terms:
+        if dic_Terms.get(term) is None:
+           dic_Terms[term] = 1
 
-def deleteDocument(cur, docId):
+           cur.execute("select term from terms where term = %(term)s", {'term': term})
+           recset = cur.fetchall()
 
-    # 1 Query the index based on the document to identify terms
-    # 1.1 For each term identified, delete its occurrences in the index for that document
-    # 1.2 Check if there are no more occurrences of the term in another document. If this happens, delete the term from the database.
-    # --> add your Python code here
+           if not recset:
+              sql = "Insert into terms (term, num_chars) Values (%s, %s)"
+              values = [term, len(term)]
+              cur.execute(sql, values)
 
-    # 2 Delete the document from the database
-    # --> add your Python code here
+        else:
+           dic_Terms[term] += 1
+
+    terms = set(terms)
+    for term in terms:
+        sql = "Insert into index (doc, term, term_count) Values (%s, %s, %s)"
+        values = [docId, term, dic_Terms[term]]
+        cur.execute(sql, values)
 
 def updateDocument(cur, docId, docText, docTitle, docDate, docCat):
+    deleteDocument(cur, docId)
+    createDocument(cur, docId, docText, docTitle, docDate, docCat)
 
-    # 1 Delete the document
-    # --> add your Python code here
+def deleteDocument(cur, docId):
+    cur.execute("select term from index where doc = %(docId)s", {'docId': docId})
+    recset = cur.fetchall()
 
-    # 2 Create the document with the same id
-    # --> add your Python code here
+    for term in recset:
+        sql = "Delete from index where doc = %(docId)s and term = %(term)s"
+        cur.execute(sql, {'docId': docId, 'term': term['term']})
+        cur.execute("select term from index where term = %(term)s", {'term': term['term']})
+        recset2 = cur.fetchall()
+        if not recset2:
+           sql = "Delete from terms where term = %(term)s"
+           cur.execute(sql, {'term': term['term']})
+    sql = "Delete from documents where doc = %(docId)s"
+    cur.execute(sql, {'docId': docId})
 
 def getIndex(cur):
+    dicIndex = {}
+    cur.execute("SELECT index.term, index.term_count, documents.title from index inner join documents on index.doc = documents.doc " 
+                "order by index.term, index.term_count")
+    recset = cur.fetchall()
+    for rec in recset:
+        if dicIndex.get(rec['term']) is None:
+           dicIndex[rec['term']] = rec['title'] + ":" + str(rec['term_count'])
+        else:
+           dicIndex[rec['term']] += ", " + rec['title'] + ":" + str(rec['term_count'])
 
-    # Query the database to return the documents where each term occurs with their corresponding count. Output example:
-    # {'baseball':'Exercise:1','summer':'Exercise:1,California:1,Arizona:1','months':'Exercise:1,Discovery:3'}
-    # ...
-    # --> add your Python code here
+    return dicIndex
+
+def convertText(text):
+    text = text.lower()
+    text = text.replace(",","")
+    text = text.replace(".", "")
+    text = text.replace("!", "")
+    text = text.replace("?", "")
+    return text
